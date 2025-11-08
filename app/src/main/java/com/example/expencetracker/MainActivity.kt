@@ -7,9 +7,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-//import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -26,7 +23,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.ExperimentalMaterial3Api
-//import androidx.compose.ui.text.input.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -180,20 +176,24 @@ class ExpenseRepository(private val dao: ExpenseDao) {
     }
 
     suspend fun add(expense: Expense) {
+        _items.add(expense)
         dao.insert(expense.toEntity())
     }
 
     suspend fun update(expense: Expense) {
+        val idx = _items.indexOfFirst { it.id == expense.id }
+        if (idx >= 0) _items[idx] = expense
         dao.update(expense.toEntity())
     }
 
     suspend fun delete(id: String) {
+        _items.removeAll { it.id == id }
         dao.delete(id)
     }
 
-    suspend fun monthlyTotal(month: YearMonth, zone: ZoneId): Double {
+    suspend fun totalsByCategory(month: YearMonth, zone: ZoneId): List<CategoryTotal> {
         val (start, end) = monthBounds(month, zone)
-        return dao.monthlyTotal(start, end)
+        return dao.totalsByCategory(start, end)
     }
 }
 
@@ -254,9 +254,7 @@ fun ExpenseApp() {
             )
             Spacer(Modifier.height(16.dp))
             // Monthly header with edge-pinned arrows and total for the month
-            val monthlyTotal by produceState(initialValue = 0.0, month, zone) {
-                value = state.repo.monthlyTotal(month, zone)
-            }
+            val monthlyTotal = state.expensesForMonth(month).sumOf { it.amount }
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
