@@ -26,6 +26,12 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Fill
 import java.text.NumberFormat
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -35,6 +41,7 @@ import java.time.format.DateTimeFormatter
 import java.time.ZoneOffset
 import java.time.Instant
 import java.util.*
+import androidx.compose.ui.text.style.TextAlign
 
 import androidx.room.*
 import androidx.room.Room
@@ -124,7 +131,21 @@ interface ExpenseDao {
         WHERE occurredAtEpochMs BETWEEN :start AND :end
     """)
     suspend fun monthlyTotal(start: Long, end: Long): Double
+
+    @Query("""
+        SELECT category, SUM(amount) AS total
+        FROM expenses
+        WHERE occurredAtEpochMs BETWEEN :start AND :end
+        GROUP BY category
+        ORDER BY total DESC
+    """)
+    suspend fun totalsByCategory(start: Long, end: Long): List<CategoryTotal>
 }
+
+data class CategoryTotal(
+    val category: String,
+    val total: Double
+)
 
 @Database(entities = [ExpenseEntity::class], version = 1)
 abstract class AppDb : RoomDatabase() {
@@ -213,6 +234,7 @@ fun ExpenseApp() {
     val repo = remember { ExpenseRepository(db.expenseDao()) }
     val state = remember { ExpenseState(repo) }
     val scope = rememberCoroutineScope()
+    var showStats by remember { mutableStateOf(false) }
     val month = state.currentMonth
     val formatter = DateTimeFormatter.ofPattern("MMM yyyy", Locale.CANADA)
     val currency = remember { NumberFormat.getCurrencyInstance(Locale.CANADA) }
@@ -226,72 +248,88 @@ fun ExpenseApp() {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Expense Tracker") }
+                title = { Text("Expense Tracker") },
+                actions = {
+                    if (!showStats) {
+                        TextButton(onClick = { showStats = true }) { Text("Stat") }
+                    } else {
+                        TextButton(onClick = { showStats = false }) { Text("List") }
+                    }
+                }
             )
         }
     ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .padding(innerPadding)
-                .padding(horizontal = 16.dp)
-                .verticalScroll(rememberScrollState())
-        ) {
-            Spacer(Modifier.height(8.dp))
-            ExpenseEntryForm(
-                onSubmit = { title, amount, category, date ->
-                    scope.launch {
-                        state.repo.add(
-                            Expense(
-                                title = title,
-                                amount = amount,
-                                category = category,
-                                occurredAt = date
-                            )
-                        )
-                        state.repo.loadMonth(state.currentMonth, zone)
-                    }
-                }
-            )
-            Spacer(Modifier.height(16.dp))
-            // Monthly header with edge-pinned arrows and total for the month
-            val monthlyTotal = state.expensesForMonth(month).sumOf { it.amount }
-            Box(
+        if (!showStats) {
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                contentAlignment = Alignment.Center
+                    .padding(innerPadding)
+                    .padding(horizontal = 16.dp)
+                    .verticalScroll(rememberScrollState())
             ) {
-                // Center: month and total
-                Text(
-                    text = "${month.format(formatter)} • Total: ${currency.format(monthlyTotal)}",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.primary
+                Spacer(Modifier.height(8.dp))
+                ExpenseEntryForm(
+                    onSubmit = { title, amount, category, date ->
+                        scope.launch {
+                            state.repo.add(
+                                Expense(
+                                    title = title,
+                                    amount = amount,
+                                    category = category,
+                                    occurredAt = date
+                                )
+                            )
+                            state.repo.loadMonth(state.currentMonth, zone)
+                        }
+                    }
                 )
-                // Left edge: previous month
-                IconButton(
-                    onClick = { state.currentMonth = state.currentMonth.minusMonths(1) },
-                    modifier = Modifier.align(Alignment.CenterStart)
+                Spacer(Modifier.height(16.dp))
+                // Monthly header with edge-pinned arrows and total for the month
+                val monthlyTotal = state.expensesForMonth(month).sumOf { it.amount }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Show previous month")
-                }
-                // Right edge: next month
-                IconButton(
-                    onClick = { state.currentMonth = state.currentMonth.plusMonths(1) },
-                    modifier = Modifier.align(Alignment.CenterEnd)
-                ) {
-                    Icon(Icons.Default.ArrowForward, contentDescription = "Show next month")
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            ExpenseList(
-                items = state.expensesForMonth(month),
-                onEdit = { editing = it },
-                onDelete = { id ->
-                    scope.launch {
-                        state.repo.delete(id)
-                        state.repo.loadMonth(state.currentMonth, zone)
+                    // Center: month and total
+                    Text(
+                        text = "${month.format(formatter)} • Total: ${currency.format(monthlyTotal)}",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    // Left edge: previous month
+                    IconButton(
+                        onClick = { state.currentMonth = state.currentMonth.minusMonths(1) },
+                        modifier = Modifier.align(Alignment.CenterStart)
+                    ) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Show previous month")
+                    }
+                    // Right edge: next month
+                    IconButton(
+                        onClick = { state.currentMonth = state.currentMonth.plusMonths(1) },
+                        modifier = Modifier.align(Alignment.CenterEnd)
+                    ) {
+                        Icon(Icons.Default.ArrowForward, contentDescription = "Show next month")
                     }
                 }
+                Spacer(Modifier.height(8.dp))
+                ExpenseList(
+                    items = state.expensesForMonth(month),
+                    onEdit = { editing = it },
+                    onDelete = { id ->
+                        scope.launch {
+                            state.repo.delete(id)
+                            state.repo.loadMonth(state.currentMonth, zone)
+                        }
+                    }
+                )
+            }
+        } else {
+            StatsScreen(
+                state = state,
+                month = month,
+                zone = zone,
+                contentPadding = innerPadding
             )
         }
     }
@@ -309,6 +347,138 @@ fun ExpenseApp() {
                 }
             }
         )
+    }
+}
+
+@Composable
+fun StatsScreen(
+    state: ExpenseState,
+    month: YearMonth,
+    zone: ZoneId,
+    contentPadding: PaddingValues = PaddingValues(0.dp)
+) {
+    val formatter = remember { DateTimeFormatter.ofPattern("MMM yyyy", Locale.CANADA) }
+    val currency = remember { NumberFormat.getCurrencyInstance(Locale.CANADA) }
+    val monthlyTotal = state.expensesForMonth(month).sumOf { it.amount }
+
+    // Load category totals from DB for accuracy
+    val totals by produceState(initialValue = emptyList<CategoryTotal>(), month, zone) {
+        value = state.repo.totalsByCategory(month, zone)
+    }
+
+    Column(
+        modifier = Modifier
+            .padding(contentPadding)
+            .padding(horizontal = 16.dp)
+            .fillMaxWidth()
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "${month.format(formatter)} • Total: ${currency.format(monthlyTotal)}",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            IconButton(
+                onClick = { state.currentMonth = state.currentMonth.minusMonths(1) },
+                modifier = Modifier.align(Alignment.CenterStart)
+            ) { Icon(Icons.Default.ArrowBack, contentDescription = "Show previous month") }
+            IconButton(
+                onClick = { state.currentMonth = state.currentMonth.plusMonths(1) },
+                modifier = Modifier.align(Alignment.CenterEnd)
+            ) { Icon(Icons.Default.ArrowForward, contentDescription = "Show next month") }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        if (totals.isEmpty() || totals.sumOf { it.total } == 0.0) {
+            Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                Text("No data for this month")
+            }
+        } else {
+            PieChartWithLegend(totals = totals)
+        }
+    }
+}
+
+@Composable
+fun PieChartWithLegend(totals: List<CategoryTotal>) {
+    val sum = totals.sumOf { it.total }.coerceAtLeast(0.000001)
+    val currency = NumberFormat.getCurrencyInstance(Locale.CANADA)
+    val colors = listOf(
+        MaterialTheme.colorScheme.primary,
+        MaterialTheme.colorScheme.secondary,
+        MaterialTheme.colorScheme.tertiary,
+        MaterialTheme.colorScheme.primaryContainer,
+        MaterialTheme.colorScheme.secondaryContainer,
+        MaterialTheme.colorScheme.tertiaryContainer,
+        MaterialTheme.colorScheme.inversePrimary,
+        MaterialTheme.colorScheme.surfaceTint,
+        MaterialTheme.colorScheme.error,
+        MaterialTheme.colorScheme.onPrimaryContainer,
+        MaterialTheme.colorScheme.onSecondaryContainer,
+        MaterialTheme.colorScheme.onTertiaryContainer
+    )
+
+    // Pie
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(240.dp)
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+            var startAngle = -90f
+            val pieSize = Size(size.minDimension, size.minDimension)
+            val topLeft = Offset(
+                (this.size.width - pieSize.width) / 2f,
+                0f
+            )
+            totals.forEachIndexed { index, ct ->
+                val sweep = ((ct.total / sum) * 360f).toFloat()
+                drawArc(
+                    color = colors[index % colors.size],
+                    startAngle = startAngle,
+                    sweepAngle = sweep,
+                    useCenter = true,
+                    topLeft = topLeft,
+                    size = pieSize,
+                    style = Fill
+                )
+                startAngle += sweep
+            }
+        }
+    }
+
+    Spacer(Modifier.height(12.dp))
+
+    // Legend
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        totals.forEachIndexed { index, ct ->
+            val percent = (ct.total / sum * 100).let { String.format(Locale.CANADA, "%.1f%%", it) }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(12.dp)
+                        .background(colors[index % colors.size], CircleShape)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = ct.category,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "${currency.format(ct.total)} ($percent)",
+                    textAlign = TextAlign.End
+                )
+            }
+        }
     }
 }
 
