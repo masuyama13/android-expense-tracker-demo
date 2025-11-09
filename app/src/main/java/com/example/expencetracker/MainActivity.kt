@@ -11,8 +11,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
@@ -221,7 +222,7 @@ class ExpenseRepository(private val dao: ExpenseDao) {
 // ---------- ViewModel-like holder (simple, no AndroidX ViewModel to keep single file) ----------
 class ExpenseState(val repo: ExpenseRepository) {
     var currentMonth by mutableStateOf(YearMonth.now())
-    fun expensesForMonth(month: YearMonth): List<Expense> =
+    fun expensesForMonth(): List<Expense> =
         repo.items.sortedByDescending { it.occurredAt }
 }
 
@@ -284,7 +285,7 @@ fun ExpenseApp() {
                 )
                 Spacer(Modifier.height(16.dp))
                 // Monthly header with edge-pinned arrows and total for the month
-                val monthlyTotal = state.expensesForMonth(month).sumOf { it.amount }
+                val monthlyTotal = state.expensesForMonth().sumOf { it.amount }
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -302,19 +303,19 @@ fun ExpenseApp() {
                         onClick = { state.currentMonth = state.currentMonth.minusMonths(1) },
                         modifier = Modifier.align(Alignment.CenterStart)
                     ) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Show previous month")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Show previous month")
                     }
                     // Right edge: next month
                     IconButton(
                         onClick = { state.currentMonth = state.currentMonth.plusMonths(1) },
                         modifier = Modifier.align(Alignment.CenterEnd)
                     ) {
-                        Icon(Icons.Default.ArrowForward, contentDescription = "Show next month")
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Show next month")
                     }
                 }
                 Spacer(Modifier.height(8.dp))
                 ExpenseList(
-                    items = state.expensesForMonth(month),
+                    items = state.expensesForMonth(),
                     onEdit = { editing = it },
                     onDelete = { id ->
                         scope.launch {
@@ -359,7 +360,7 @@ fun StatsScreen(
 ) {
     val formatter = remember { DateTimeFormatter.ofPattern("MMM yyyy", Locale.CANADA) }
     val currency = remember { NumberFormat.getCurrencyInstance(Locale.CANADA) }
-    val monthlyTotal = state.expensesForMonth(month).sumOf { it.amount }
+    val monthlyTotal = state.expensesForMonth().sumOf { it.amount }
 
     // Load category totals from DB for accuracy
     val totals by produceState(initialValue = emptyList<CategoryTotal>(), month, zone) {
@@ -386,11 +387,11 @@ fun StatsScreen(
             IconButton(
                 onClick = { state.currentMonth = state.currentMonth.minusMonths(1) },
                 modifier = Modifier.align(Alignment.CenterStart)
-            ) { Icon(Icons.Default.ArrowBack, contentDescription = "Show previous month") }
+            ) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Show previous month") }
             IconButton(
                 onClick = { state.currentMonth = state.currentMonth.plusMonths(1) },
                 modifier = Modifier.align(Alignment.CenterEnd)
-            ) { Icon(Icons.Default.ArrowForward, contentDescription = "Show next month") }
+            ) { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Show next month") }
         }
 
         Spacer(Modifier.height(8.dp))
@@ -513,7 +514,7 @@ fun ExpenseEntryForm(
             OutlinedTextField(
                 value = amountInput,
                 onValueChange = { amountInput = it.filter { ch -> ch.isDigit() || ch == '.' } },
-                label = { Text("Amount (${currencyFormatter.currency.currencyCode})") },
+                label = { Text("Amount (${currencyFormatter.currency?.currencyCode ?: "CAD"})") },
                 placeholder = { Text("0.00") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 singleLine = true,
@@ -554,7 +555,7 @@ fun CategoryDropdown(selected: String, onSelected: (String) -> Unit) {
             label = { Text("Category") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier
-                .menuAnchor()
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true)
                 .fillMaxWidth()
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
@@ -591,7 +592,7 @@ fun DateFieldWithCalendar(date: LocalDate, onDateChanged: (LocalDate) -> Unit) {
                 }
             },
             modifier = Modifier
-                .menuAnchor()
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true)
                 .fillMaxWidth()
                 .clickable { open = true }
         )
