@@ -43,6 +43,7 @@ import java.time.ZoneOffset
 import java.time.Instant
 import java.util.*
 import androidx.compose.ui.text.style.TextAlign
+import androidx.core.content.edit
 
 import androidx.room.*
 import androidx.room.Room
@@ -335,7 +336,9 @@ fun ExpenseApp() {
                     onBudgetChange = { newBudget ->
                         state.monthlyBudget = newBudget
                         val prefs = context.getSharedPreferences("settings", 0)
-                        prefs.edit().putFloat("monthly_budget", newBudget.toFloat()).apply()
+                        prefs.edit {
+                            putFloat("monthly_budget", newBudget.toFloat())
+                        }
                         showSettings = false
                     }
                 )
@@ -345,7 +348,6 @@ fun ExpenseApp() {
                     state = state,
                     category = selectedCategoryForStats!!,
                     month = month,
-                    zone = zone,
                     contentPadding = innerPadding,
                     onEdit = { editing = it },
                     onDelete = { id ->
@@ -432,9 +434,6 @@ fun ExpenseApp() {
                             contentPadding = innerPadding,
                             onCategoryClick = { category ->
                                 selectedCategoryForStats = category
-                            },
-                            onShowMonthlyBars = {
-                                statsMode = StatsMode.MonthlyBars
                             }
                         )
                     }
@@ -518,8 +517,7 @@ fun StatsScreen(
     month: YearMonth,
     zone: ZoneId,
     contentPadding: PaddingValues = PaddingValues(0.dp),
-    onCategoryClick: (String) -> Unit,
-    onShowMonthlyBars: () -> Unit
+    onCategoryClick: (String) -> Unit
 ) {
     val formatter = remember { DateTimeFormatter.ofPattern("MMM yyyy", Locale.CANADA) }
     val currency = remember { NumberFormat.getCurrencyInstance(Locale.CANADA) }
@@ -660,7 +658,6 @@ fun CategoryExpensesScreen(
     state: ExpenseState,
     category: String,
     month: YearMonth,
-    zone: ZoneId,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     onEdit: (Expense) -> Unit,
     onDelete: (String) -> Unit
@@ -1059,9 +1056,9 @@ fun MonthlyTotalsScreen(
                 ) {
                     // Background grid
                     Canvas(modifier = Modifier.fillMaxSize()) {
-                        val steps = 4
-                        for (i in 0..steps) {
-                            val y = size.height * (i / steps.toFloat())
+                        val gridSteps = 4
+                        for (i in 0..gridSteps) {
+                            val y = size.height * (i / gridSteps.toFloat())
                             drawLine(
                                 color = gridColor,
                                 start = Offset(0f, y),
