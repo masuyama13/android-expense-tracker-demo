@@ -227,6 +227,7 @@ class ExpenseRepository(private val dao: ExpenseDao) {
 // ---------- ViewModel-like holder (simple, no AndroidX ViewModel to keep single file) ----------
 class ExpenseState(val repo: ExpenseRepository) {
     var currentMonth by mutableStateOf(YearMonth.now())
+    var monthlyBudget by mutableStateOf(2000.0)
     fun expensesForMonth(): List<Expense> =
         repo.items.sortedByDescending { it.occurredAt }
 }
@@ -242,6 +243,15 @@ fun ExpenseApp() {
     val repo = remember { ExpenseRepository(db.expenseDao()) }
     val state = remember { ExpenseState(repo) }
     val scope = rememberCoroutineScope()
+    var showSettings by remember { mutableStateOf(false) }
+
+    // Load budget from SharedPreferences once
+    LaunchedEffect(Unit) {
+        val prefs = context.getSharedPreferences("settings", 0)
+        val saved = prefs.getFloat("monthly_budget", 2000f).toDouble()
+        state.monthlyBudget = saved
+    }
+
     var showStats by remember { mutableStateOf(false) }
     var statsMode by remember { mutableStateOf(StatsMode.CategoryPie) }
     val month = state.currentMonth
@@ -260,6 +270,7 @@ fun ExpenseApp() {
             TopAppBar(
                 title = {
                     when {
+                        showSettings -> Text("Settings")
                         selectedCategoryForStats != null -> Text("Expenses: ${selectedCategoryForStats}")
                         showStats && statsMode == StatsMode.MonthlyBars -> Text("Monthly Totals")
                         showStats -> Text("Expense Stats")
@@ -267,17 +278,27 @@ fun ExpenseApp() {
                     }
                 },
                 navigationIcon = {
-                    if (selectedCategoryForStats != null) {
-                        IconButton(onClick = { selectedCategoryForStats = null }) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back to stats"
-                            )
+                    when {
+                        showSettings -> {
+                            IconButton(onClick = { showSettings = false }) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back"
+                                )
+                            }
+                        }
+                        selectedCategoryForStats != null -> {
+                            IconButton(onClick = { selectedCategoryForStats = null }) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back to stats"
+                                )
+                            }
                         }
                     }
                 },
                 actions = {
-                    if (selectedCategoryForStats == null) {
+                    if (!showSettings && selectedCategoryForStats == null) {
                         if (!showStats) {
                             // List screen: can go to stats
                             TextButton(onClick = { showStats = true }) {
@@ -307,6 +328,18 @@ fun ExpenseApp() {
         }
     ) { innerPadding ->
         when {
+            showSettings -> {
+                SettingsScreen(
+                    currentBudget = state.monthlyBudget,
+                    contentPadding = innerPadding,
+                    onBudgetChange = { newBudget ->
+                        state.monthlyBudget = newBudget
+                        val prefs = context.getSharedPreferences("settings", 0)
+                        prefs.edit().putFloat("monthly_budget", newBudget.toFloat()).apply()
+                        showSettings = false
+                    }
+                )
+            }
             selectedCategoryForStats != null -> {
                 CategoryExpensesScreen(
                     state = state,
@@ -410,7 +443,11 @@ fun ExpenseApp() {
                             state = state,
                             currentMonth = month,
                             zone = zone,
-                            contentPadding = innerPadding
+                            budget = state.monthlyBudget,
+                            contentPadding = innerPadding,
+                            onOpenSettings = {
+                                showSettings = true
+                            }
                         )
                     }
                 }
@@ -431,6 +468,47 @@ fun ExpenseApp() {
                 }
             }
         )
+    }
+}
+@Composable
+fun SettingsScreen(
+    currentBudget: Double,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+    onBudgetChange: (Double) -> Unit
+) {
+    var budgetInput by rememberSaveable { mutableStateOf(currentBudget.toInt().toString()) }
+    val isValid = budgetInput.toDoubleOrNull()?.let { it > 0 } == true
+
+    Column(
+        modifier = Modifier
+            .padding(contentPadding)
+            .padding(horizontal = 16.dp)
+            .fillMaxWidth()
+    ) {
+        Text("Monthly budget", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = budgetInput,
+            onValueChange = { input ->
+                // Only allow digits
+                budgetInput = input.filter { ch -> ch.isDigit() }
+            },
+            label = { Text("Budget (CAD)") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                val value = budgetInput.toDoubleOrNull()
+                if (value != null && value > 0) {
+                    onBudgetChange(value)
+                }
+            },
+            enabled = isValid
+        ) {
+            Text("Save")
+        }
     }
 }
 
@@ -857,7 +935,9 @@ fun MonthlyTotalsScreen(
     state: ExpenseState,
     currentMonth: YearMonth,
     zone: ZoneId,
-    contentPadding: PaddingValues = PaddingValues(0.dp)
+    budget: Double,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+    onOpenSettings: () -> Unit
 ) {
     // Only show the month name (e.g., "Jan"), not year/day
     val formatter = remember { DateTimeFormatter.ofPattern("MMM", Locale.CANADA) }
@@ -931,8 +1011,8 @@ fun MonthlyTotalsScreen(
                 Text("No data for these months")
             }
         } else {
-            // Fix the top of the Y-axis to $2000.00
-            val safeMax = 2000.0
+            // Use user-defined monthly budget as the top of the Y-axis
+            val safeMax = budget.coerceAtLeast(1.0)
             // Axis labels: no decimal places
             val axisCurrency = remember {
                 NumberFormat.getCurrencyInstance(Locale.CANADA).apply {
@@ -1049,6 +1129,15 @@ fun MonthlyTotalsScreen(
                             )
                         }
                     }
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Button(onClick = onOpenSettings) {
+                    Text("Settings")
                 }
             }
         }
