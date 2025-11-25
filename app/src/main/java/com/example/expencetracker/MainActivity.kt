@@ -1078,6 +1078,9 @@ fun MonthlyTotalsScreen(
                     ) {
                         monthlyTotals.forEach { (_, total) ->
                             val fraction = (total / safeMax).toFloat().coerceIn(0f, 1f)
+                            val barColor =
+                                if (total > budget) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.primary
 
                             Box(
                                 modifier = Modifier
@@ -1090,7 +1093,7 @@ fun MonthlyTotalsScreen(
                                         .fillMaxHeight(fraction)
                                         .width(18.dp)
                                         .background(
-                                            MaterialTheme.colorScheme.primary,
+                                            barColor,
                                             shape = CircleShape
                                         )
                                 )
