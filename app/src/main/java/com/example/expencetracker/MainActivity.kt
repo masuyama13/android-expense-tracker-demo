@@ -213,6 +213,11 @@ class ExpenseRepository(private val dao: ExpenseDao) {
         dao.delete(id)
     }
 
+    suspend fun monthlyTotal(month: YearMonth, zone: ZoneId): Double {
+        val (start, end) = monthBounds(month, zone)
+        return dao.monthlyTotal(start, end)
+    }
+
     suspend fun totalsByCategory(month: YearMonth, zone: ZoneId): List<CategoryTotal> {
         val (start, end) = monthBounds(month, zone)
         return dao.totalsByCategory(start, end)
@@ -226,6 +231,8 @@ class ExpenseState(val repo: ExpenseRepository) {
         repo.items.sortedByDescending { it.occurredAt }
 }
 
+enum class StatsMode { CategoryPie, MonthlyBars }
+
 // ---------- UI ----------
 @Composable
 fun ExpenseApp() {
@@ -236,6 +243,7 @@ fun ExpenseApp() {
     val state = remember { ExpenseState(repo) }
     val scope = rememberCoroutineScope()
     var showStats by remember { mutableStateOf(false) }
+    var statsMode by remember { mutableStateOf(StatsMode.CategoryPie) }
     val month = state.currentMonth
     val formatter = DateTimeFormatter.ofPattern("MMM yyyy", Locale.CANADA)
     val currency = remember { NumberFormat.getCurrencyInstance(Locale.CANADA) }
@@ -253,6 +261,7 @@ fun ExpenseApp() {
                 title = {
                     when {
                         selectedCategoryForStats != null -> Text("Expenses: ${selectedCategoryForStats}")
+                        showStats && statsMode == StatsMode.MonthlyBars -> Text("Monthly Totals")
                         showStats -> Text("Expense Stats")
                         else -> Text("Expense Tracker")
                     }
@@ -270,9 +279,27 @@ fun ExpenseApp() {
                 actions = {
                     if (selectedCategoryForStats == null) {
                         if (!showStats) {
-                            TextButton(onClick = { showStats = true }) { Text("Stat") }
+                            // List screen: can go to stats
+                            TextButton(onClick = { showStats = true }) {
+                                Text("Stat")
+                            }
                         } else {
-                            TextButton(onClick = { showStats = false }) { Text("List") }
+                            // Stats screens: provide navigation between stats modes and back to list
+                            if (statsMode == StatsMode.CategoryPie) {
+                                // Expense Stats -> Monthly Totals
+                                TextButton(onClick = { statsMode = StatsMode.MonthlyBars }) {
+                                    Text("Monthly")
+                                }
+                            } else if (statsMode == StatsMode.MonthlyBars) {
+                                // Monthly Totals -> Expense Stats
+                                TextButton(onClick = { statsMode = StatsMode.CategoryPie }) {
+                                    Text("Stats")
+                                }
+                            }
+                            // In both stats modes, keep "List" to return to main list
+                            TextButton(onClick = { showStats = false }) {
+                                Text("List")
+                            }
                         }
                     }
                 }
@@ -363,15 +390,30 @@ fun ExpenseApp() {
                 }
             }
             else -> {
-                StatsScreen(
-                    state = state,
-                    month = month,
-                    zone = zone,
-                    contentPadding = innerPadding,
-                    onCategoryClick = { category ->
-                        selectedCategoryForStats = category
+                when (statsMode) {
+                    StatsMode.CategoryPie -> {
+                        StatsScreen(
+                            state = state,
+                            month = month,
+                            zone = zone,
+                            contentPadding = innerPadding,
+                            onCategoryClick = { category ->
+                                selectedCategoryForStats = category
+                            },
+                            onShowMonthlyBars = {
+                                statsMode = StatsMode.MonthlyBars
+                            }
+                        )
                     }
-                )
+                    StatsMode.MonthlyBars -> {
+                        MonthlyTotalsScreen(
+                            state = state,
+                            currentMonth = month,
+                            zone = zone,
+                            contentPadding = innerPadding
+                        )
+                    }
+                }
             }
         }
     }
@@ -398,7 +440,8 @@ fun StatsScreen(
     month: YearMonth,
     zone: ZoneId,
     contentPadding: PaddingValues = PaddingValues(0.dp),
-    onCategoryClick: (String) -> Unit
+    onCategoryClick: (String) -> Unit,
+    onShowMonthlyBars: () -> Unit
 ) {
     val formatter = remember { DateTimeFormatter.ofPattern("MMM yyyy", Locale.CANADA) }
     val currency = remember { NumberFormat.getCurrencyInstance(Locale.CANADA) }
@@ -437,7 +480,6 @@ fun StatsScreen(
         }
 
         Spacer(Modifier.height(8.dp))
-
         if (totals.isEmpty() || totals.sumOf { it.total } == 0.0) {
             Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                 Text("No data for this month")
@@ -454,7 +496,11 @@ fun StatsScreen(
 @Composable
 fun PieChartWithLegend(totals: List<CategoryTotal>, onCategoryClick: (String) -> Unit) {
     val sum = totals.sumOf { it.total }.coerceAtLeast(0.000001)
-    val currency = NumberFormat.getCurrencyInstance(Locale.CANADA)
+    val currency = remember {
+        NumberFormat.getCurrencyInstance(Locale.CANADA).apply {
+            maximumFractionDigits = 0
+        }
+    }
     val colors = listOf(
         MaterialTheme.colorScheme.primary,
         MaterialTheme.colorScheme.secondary,
@@ -805,4 +851,206 @@ fun EditExpenseDialog(
 @Composable
 fun PreviewExpenseApp() {
     TealTheme { ExpenseApp() }
+}
+@Composable
+fun MonthlyTotalsScreen(
+    state: ExpenseState,
+    currentMonth: YearMonth,
+    zone: ZoneId,
+    contentPadding: PaddingValues = PaddingValues(0.dp)
+) {
+    // Only show the month name (e.g., "Jan"), not year/day
+    val formatter = remember { DateTimeFormatter.ofPattern("MMM", Locale.CANADA) }
+    val currency = remember {
+        NumberFormat.getCurrencyInstance(Locale.CANADA).apply {
+            maximumFractionDigits = 0
+        }
+    }
+    // currentMonth を含む過去6か月
+    val months = remember(currentMonth) {
+        (5 downTo 0).map { currentMonth.minusMonths(it.toLong()) }
+    }
+
+    val monthlyTotals by produceState(
+        initialValue = emptyList<Pair<YearMonth, Double>>(),
+        months,
+        zone
+    ) {
+        val list = months.map { m ->
+            val total = state.repo.monthlyTotal(m, zone)
+            m to total
+        }
+        value = list
+    }
+
+    Column(
+        modifier = Modifier
+            .padding(contentPadding)
+            .padding(horizontal = 16.dp)
+            .fillMaxWidth()
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "Last 6 months",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+                textAlign = TextAlign.Center
+            )
+            IconButton(
+                onClick = { state.currentMonth = state.currentMonth.minusMonths(6) },
+                modifier = Modifier.align(Alignment.CenterStart)
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Show previous months"
+                )
+            }
+            IconButton(
+                onClick = { state.currentMonth = state.currentMonth.plusMonths(6) },
+                modifier = Modifier.align(Alignment.CenterEnd)
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = "Show next months"
+                )
+            }
+        }
+
+        if (monthlyTotals.isEmpty() || monthlyTotals.all { it.second == 0.0 }) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("No data for these months")
+            }
+        } else {
+            // Fix the top of the Y-axis to $2000.00
+            val safeMax = 2000.0
+            // Axis labels: no decimal places
+            val axisCurrency = remember {
+                NumberFormat.getCurrencyInstance(Locale.CANADA).apply {
+                    maximumFractionDigits = 0
+                }
+            }
+            val gridColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+
+            Spacer(Modifier.height(8.dp))
+
+            val chartHeight = 180.dp
+            val axisWidth = 72.dp
+
+            // Chart area: Y-axis + bars
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(chartHeight),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                // Y-axis labels (0 .. safeMax)
+                val steps = 4
+                Column(
+                    modifier = Modifier
+                        .width(axisWidth)
+                        .fillMaxHeight()
+                        .padding(end = 8.dp),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    for (i in steps downTo 0) {
+                        val value = safeMax * i / steps
+                        Text(
+                            text = axisCurrency.format(value),
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+
+                // Bars area with light horizontal grid lines in the background
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                ) {
+                    // Background grid
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val steps = 4
+                        for (i in 0..steps) {
+                            val y = size.height * (i / steps.toFloat())
+                            drawLine(
+                                color = gridColor,
+                                start = Offset(0f, y),
+                                end = Offset(size.width, y),
+                                strokeWidth = 1.dp.toPx()
+                            )
+                        }
+                    }
+                    // Bars (only the rectangles, no labels here)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize(),
+                        verticalAlignment = Alignment.Bottom
+                    ) {
+                        monthlyTotals.forEach { (_, total) ->
+                            val fraction = (total / safeMax).toFloat().coerceIn(0f, 1f)
+
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight(),
+                                contentAlignment = Alignment.BottomCenter
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight(fraction)
+                                        .width(18.dp)
+                                        .background(
+                                            MaterialTheme.colorScheme.primary,
+                                            shape = CircleShape
+                                        )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
+
+            // Labels row: month name and, if non-zero, total drawn below the 0$ line
+            Row(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Spacer(
+                    modifier = Modifier
+                        .width(axisWidth + 8.dp)
+                )
+                monthlyTotals.forEach { (month, total) ->
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        // Month name
+                        Text(
+                            text = month.format(formatter),
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = TextAlign.Center
+                        )
+                        // Show total only when it is non-zero
+                        if (total != 0.0) {
+                            Text(
+                                text = currency.format(total),
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
