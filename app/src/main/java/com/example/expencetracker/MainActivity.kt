@@ -44,10 +44,10 @@ import java.time.Instant
 import java.util.*
 import androidx.compose.ui.text.style.TextAlign
 import androidx.core.content.edit
-
-import androidx.room.*
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.room.Room
-import kotlinx.coroutines.launch
 import java.time.ZoneId
 
 class MainActivity : ComponentActivity() {
@@ -62,7 +62,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// ---------- Theme ----------
 private val Teal = Color(0xFF00897B)
 private val TealDark = Color(0xFF00695C)
 private val TealLight = Color(0xFF4DB6AC)
@@ -82,168 +81,23 @@ fun TealTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = scheme, typography = Typography(), content = content)
 }
 
-// ---------- Data layer ----------
-/** Fixed categories for the app. Users cannot customize. */
-val CATEGORIES: List<String> = listOf(
-    "Housing",
-    "Utilities",
-    "Groceries",
-    "Transportation",
-    "Dining Out",
-    "Shopping",
-    "Health & Insurance",
-    "Entertainment",
-    "Education",
-    "Subscriptions",
-    "Savings & Investments",
-    "Others"
-)
-
-// ---------- Room persistence (SQLite) ----------
-@Entity(tableName = "expenses", indices = [Index("occurredAtEpochMs"), Index("category")])
-data class ExpenseEntity(
-    @PrimaryKey val id: String,
-    val title: String,
-    val amount: Double,
-    val category: String,
-    val occurredAtEpochMs: Long // stored in UTC
-)
-
-@Dao
-interface ExpenseDao {
-    @Insert
-    suspend fun insert(e: ExpenseEntity)
-
-    @Update
-    suspend fun update(e: ExpenseEntity)
-
-    @Query("DELETE FROM expenses WHERE id = :id")
-    suspend fun delete(id: String)
-
-    @Query("""
-        SELECT * FROM expenses
-        WHERE occurredAtEpochMs BETWEEN :start AND :end
-        ORDER BY occurredAtEpochMs DESC
-    """)
-    suspend fun listByMonth(start: Long, end: Long): List<ExpenseEntity>
-
-    @Query("""
-        SELECT COALESCE(SUM(amount), 0)
-        FROM expenses
-        WHERE occurredAtEpochMs BETWEEN :start AND :end
-    """)
-    suspend fun monthlyTotal(start: Long, end: Long): Double
-
-    @Query("""
-        SELECT category, SUM(amount) AS total
-        FROM expenses
-        WHERE occurredAtEpochMs BETWEEN :start AND :end
-        GROUP BY category
-        ORDER BY total DESC
-    """)
-    suspend fun totalsByCategory(start: Long, end: Long): List<CategoryTotal>
-}
-
-data class CategoryTotal(
-    val category: String,
-    val total: Double
-)
-
-@Database(entities = [ExpenseEntity::class], version = 1)
-abstract class AppDb : RoomDatabase() {
-    abstract fun expenseDao(): ExpenseDao
-}
-
-private fun Expense.toEntity(zone: ZoneId = ZoneId.systemDefault()): ExpenseEntity =
-    ExpenseEntity(
-        id = id,
-        title = title,
-        amount = amount,
-        category = category,
-        occurredAtEpochMs = occurredAt.atZone(zone).toInstant().toEpochMilli()
-    )
-
-private fun ExpenseEntity.toModel(zone: ZoneId = ZoneId.systemDefault()): Expense =
-    Expense(
-        id = id,
-        title = title,
-        amount = amount,
-        category = category,
-        occurredAt = Instant.ofEpochMilli(occurredAtEpochMs).atZone(zone).toLocalDateTime()
-    )
-
-private fun monthBounds(yearMonth: YearMonth, zone: ZoneId): Pair<Long, Long> {
-    val start = yearMonth.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
-    val end = yearMonth.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1
-    return start to end
-}
-
-data class Expense(
-    val id: String = UUID.randomUUID().toString(),
-    var title: String,
-    var amount: Double,
-    var category: String,
-    var occurredAt: LocalDateTime = LocalDateTime.now()
-)
-
-/** Room-backed repository. Keeps a local state list for Compose while persisting to SQLite. */
-class ExpenseRepository(private val dao: ExpenseDao) {
-    private val _items = mutableStateListOf<Expense>()
-    val items: List<Expense> get() = _items
-
-    suspend fun loadMonth(month: YearMonth, zone: ZoneId) {
-        val (start, end) = monthBounds(month, zone)
-        val list = dao.listByMonth(start, end).map { it.toModel(zone) }
-        _items.clear()
-        _items.addAll(list)
-    }
-
-    suspend fun add(expense: Expense) {
-        _items.add(expense)
-        dao.insert(expense.toEntity())
-    }
-
-    suspend fun update(expense: Expense) {
-        val idx = _items.indexOfFirst { it.id == expense.id }
-        if (idx >= 0) _items[idx] = expense
-        dao.update(expense.toEntity())
-    }
-
-    suspend fun delete(id: String) {
-        _items.removeAll { it.id == id }
-        dao.delete(id)
-    }
-
-    suspend fun monthlyTotal(month: YearMonth, zone: ZoneId): Double {
-        val (start, end) = monthBounds(month, zone)
-        return dao.monthlyTotal(start, end)
-    }
-
-    suspend fun totalsByCategory(month: YearMonth, zone: ZoneId): List<CategoryTotal> {
-        val (start, end) = monthBounds(month, zone)
-        return dao.totalsByCategory(start, end)
-    }
-}
-
-// ---------- ViewModel-like holder (simple, no AndroidX ViewModel to keep single file) ----------
-class ExpenseState(val repo: ExpenseRepository) {
-    var currentMonth by mutableStateOf(YearMonth.now())
-    var monthlyBudget by mutableStateOf(2000.0)
-    fun expensesForMonth(): List<Expense> =
-        repo.items.sortedByDescending { it.occurredAt }
-}
-
 enum class StatsMode { CategoryPie, MonthlyBars }
 
-// ---------- UI ----------
 @Composable
 fun ExpenseApp() {
     val context = LocalContext.current
     val zone = remember { ZoneId.systemDefault() }
     val db = remember { Room.databaseBuilder(context, AppDb::class.java, "expenses.db").build() }
     val repo = remember { ExpenseRepository(db.expenseDao()) }
-    val state = remember { ExpenseState(repo) }
-    val scope = rememberCoroutineScope()
+    val viewModel: ExpenseViewModel = viewModel(
+        factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                return ExpenseViewModel(repo) as T
+            }
+        }
+    )
+    val state = viewModel
     var showSettings by remember { mutableStateOf(false) }
 
     // Load budget from SharedPreferences once
@@ -260,7 +114,7 @@ fun ExpenseApp() {
     val currency = remember { NumberFormat.getCurrencyInstance(Locale.CANADA) }
 
     LaunchedEffect(month) {
-        state.repo.loadMonth(month, zone)
+        state.loadMonth(month, zone)
     }
 
     var editing by remember { mutableStateOf<Expense?>(null) }
@@ -301,24 +155,19 @@ fun ExpenseApp() {
                 actions = {
                     if (!showSettings && selectedCategoryForStats == null) {
                         if (!showStats) {
-                            // List screen: can go to stats
                             TextButton(onClick = { showStats = true }) {
                                 Text("Stat")
                             }
                         } else {
-                            // Stats screens: provide navigation between stats modes and back to list
                             if (statsMode == StatsMode.CategoryPie) {
-                                // Expense Stats -> Monthly Totals
                                 TextButton(onClick = { statsMode = StatsMode.MonthlyBars }) {
                                     Text("Monthly")
                                 }
                             } else if (statsMode == StatsMode.MonthlyBars) {
-                                // Monthly Totals -> Expense Stats
                                 TextButton(onClick = { statsMode = StatsMode.CategoryPie }) {
                                     Text("Stats")
                                 }
                             }
-                            // In both stats modes, keep "List" to return to main list
                             TextButton(onClick = { showStats = false }) {
                                 Text("List")
                             }
@@ -351,10 +200,7 @@ fun ExpenseApp() {
                     contentPadding = innerPadding,
                     onEdit = { editing = it },
                     onDelete = { id ->
-                        scope.launch {
-                            state.repo.delete(id)
-                            state.repo.loadMonth(state.currentMonth, zone)
-                        }
+                        state.deleteExpense(id, zone)
                     }
                 )
             }
@@ -368,21 +214,11 @@ fun ExpenseApp() {
                     Spacer(Modifier.height(8.dp))
                     ExpenseEntryForm(
                         onSubmit = { title, amount, category, date ->
-                            scope.launch {
-                                state.repo.add(
-                                    Expense(
-                                        title = title,
-                                        amount = amount,
-                                        category = category,
-                                        occurredAt = date
-                                    )
-                                )
-                                state.repo.loadMonth(state.currentMonth, zone)
-                            }
+                            state.addExpense(title, amount, category, date, zone)
                         }
                     )
                     Spacer(Modifier.height(16.dp))
-                    // Monthly header with edge-pinned arrows and total for the month
+                    // Monthly expense List header
                     val monthlyTotal = state.expensesForMonth().sumOf { it.amount }
                     Box(
                         modifier = Modifier
@@ -416,10 +252,7 @@ fun ExpenseApp() {
                         items = state.expensesForMonth(),
                         onEdit = { editing = it },
                         onDelete = { id ->
-                            scope.launch {
-                                state.repo.delete(id)
-                                state.repo.loadMonth(state.currentMonth, zone)
-                            }
+                            state.deleteExpense(id, zone)
                         }
                     )
                 }
@@ -460,11 +293,8 @@ fun ExpenseApp() {
             expense = exp,
             onDismiss = { editing = null },
             onSave = { updated ->
-                scope.launch {
-                    state.repo.update(updated)
-                    state.repo.loadMonth(state.currentMonth, zone)
-                    editing = null
-                }
+                state.updateExpense(updated, zone)
+                editing = null
             }
         )
     }
@@ -513,7 +343,7 @@ fun SettingsScreen(
 
 @Composable
 fun StatsScreen(
-    state: ExpenseState,
+    state: ExpenseViewModel,
     month: YearMonth,
     zone: ZoneId,
     contentPadding: PaddingValues = PaddingValues(0.dp),
@@ -523,9 +353,8 @@ fun StatsScreen(
     val currency = remember { NumberFormat.getCurrencyInstance(Locale.CANADA) }
     val monthlyTotal = state.expensesForMonth().sumOf { it.amount }
 
-    // Load category totals from DB for accuracy
     val totals by produceState(initialValue = emptyList<CategoryTotal>(), month, zone) {
-        value = state.repo.totalsByCategory(month, zone)
+        value = state.totalsByCategory(month, zone)
     }
 
     Column(
@@ -623,7 +452,6 @@ fun PieChartWithLegend(totals: List<CategoryTotal>, onCategoryClick: (String) ->
 
     Spacer(Modifier.height(12.dp))
 
-    // Legend
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         totals.forEachIndexed { index, ct ->
             val percent = (ct.total / sum * 100).let { String.format(Locale.CANADA, "%.1f%%", it) }
@@ -655,7 +483,7 @@ fun PieChartWithLegend(totals: List<CategoryTotal>, onCategoryClick: (String) ->
 
 @Composable
 fun CategoryExpensesScreen(
-    state: ExpenseState,
+    state: ExpenseViewModel,
     category: String,
     month: YearMonth,
     contentPadding: PaddingValues = PaddingValues(0.dp),
@@ -929,32 +757,29 @@ fun PreviewExpenseApp() {
 }
 @Composable
 fun MonthlyTotalsScreen(
-    state: ExpenseState,
+    state: ExpenseViewModel,
     currentMonth: YearMonth,
     zone: ZoneId,
     budget: Double,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     onOpenSettings: () -> Unit
 ) {
-    // Only show the month name (e.g., "Jan"), not year/day
     val formatter = remember { DateTimeFormatter.ofPattern("MMM", Locale.CANADA) }
     val currency = remember {
         NumberFormat.getCurrencyInstance(Locale.CANADA).apply {
             maximumFractionDigits = 0
         }
     }
-    // currentMonth を含む過去6か月
     val months = remember(currentMonth) {
         (5 downTo 0).map { currentMonth.minusMonths(it.toLong()) }
     }
-
     val monthlyTotals by produceState(
         initialValue = emptyList<Pair<YearMonth, Double>>(),
         months,
         zone
     ) {
         val list = months.map { m ->
-            val total = state.repo.monthlyTotal(m, zone)
+            val total = state.monthlyTotal(m, zone)
             m to total
         }
         value = list
@@ -1008,9 +833,7 @@ fun MonthlyTotalsScreen(
                 Text("No data for these months")
             }
         } else {
-            // Use user-defined monthly budget as the top of the Y-axis
             val safeMax = budget.coerceAtLeast(1.0)
-            // Axis labels: no decimal places
             val axisCurrency = remember {
                 NumberFormat.getCurrencyInstance(Locale.CANADA).apply {
                     maximumFractionDigits = 0
@@ -1023,14 +846,12 @@ fun MonthlyTotalsScreen(
             val chartHeight = 180.dp
             val axisWidth = 72.dp
 
-            // Chart area: Y-axis + bars
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(chartHeight),
                 verticalAlignment = Alignment.Bottom
             ) {
-                // Y-axis labels (0 .. safeMax)
                 val steps = 4
                 Column(
                     modifier = Modifier
@@ -1067,7 +888,7 @@ fun MonthlyTotalsScreen(
                             )
                         }
                     }
-                    // Bars (only the rectangles, no labels here)
+                    // Bars (only the rectangles)
                     Row(
                         modifier = Modifier
                             .fillMaxSize(),
@@ -1102,7 +923,7 @@ fun MonthlyTotalsScreen(
 
             Spacer(Modifier.height(4.dp))
 
-            // Labels row: month name and, if non-zero, total drawn below the 0$ line
+            // Labels row: month name and total
             Row(
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -1115,19 +936,15 @@ fun MonthlyTotalsScreen(
                         modifier = Modifier.weight(1f),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // Month name
                         Text(
                             text = month.format(formatter),
                             style = MaterialTheme.typography.bodySmall,
                             textAlign = TextAlign.Center
                         )
-                        // Show total only when it is non-zero
-                        if (total != 0.0) {
-                            Text(
-                                text = currency.format(total),
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
+                        Text(
+                            text = currency.format(total),
+                            style = MaterialTheme.typography.labelSmall
+                        )
                     }
                 }
             }
