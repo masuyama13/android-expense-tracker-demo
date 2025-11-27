@@ -403,7 +403,8 @@ fun PieChartWithLegend(totals: List<CategoryTotal>, onCategoryClick: (String) ->
     val sum = totals.sumOf { it.total }.coerceAtLeast(0.000001)
     val currency = remember {
         NumberFormat.getCurrencyInstance(Locale.CANADA).apply {
-            maximumFractionDigits = 0
+            minimumFractionDigits = 2
+            maximumFractionDigits = 2
         }
     }
     val colors = listOf(
