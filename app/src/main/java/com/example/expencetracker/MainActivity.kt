@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -68,17 +69,37 @@ private val TealLight = Color(0xFF4DB6AC)
 
 @Composable
 fun TealTheme(content: @Composable () -> Unit) {
-    val scheme = lightColorScheme(
-        primary = Teal,
-        onPrimary = Color.White,
-        primaryContainer = TealLight,
-        onPrimaryContainer = Color.Black,
-        secondary = TealDark,
-        onSecondary = Color.White,
-        surface = Color(0xFFF7F8F8),
-        onSurface = Color(0xFF1B1B1B)
+    val darkTheme = isSystemInDarkTheme()
+
+    val colorScheme = if (darkTheme) {
+        darkColorScheme(
+            primary = TealLight,
+            onPrimary = Color.Black,
+            primaryContainer = TealDark,
+            onPrimaryContainer = Color.White,
+            secondary = Teal,
+            onSecondary = Color.White,
+            surface = Color(0xFF121212),
+            onSurface = Color(0xFFE0E0E0)
+        )
+    } else {
+        lightColorScheme(
+            primary = Teal,
+            onPrimary = Color.White,
+            primaryContainer = TealLight,
+            onPrimaryContainer = Color.Black,
+            secondary = TealDark,
+            onSecondary = Color.White,
+            surface = Color(0xFFF7F8F8),
+            onSurface = Color(0xFF1B1B1B)
+        )
+    }
+
+    MaterialTheme(
+        colorScheme = colorScheme,
+        typography = Typography(),
+        content = content
     )
-    MaterialTheme(colorScheme = scheme, typography = Typography(), content = content)
 }
 
 enum class StatsMode { CategoryPie, MonthlyBars }
